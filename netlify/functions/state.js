@@ -1,16 +1,21 @@
+// netlify/functions/state.js
 // CommonJS + fallback a BLOBS_SITE_ID/BLOBS_TOKEN
-const { getStore, createClient } = require('@netlify/blobs');
+const { getStore, BlobsClient } = require('@netlify/blobs');
 
-function getBlobStore(){
+function getBlobStore() {
   try {
+    // Se Blobs è disponibile nativamente nel runtime Netlify
     return getStore('paris-league');
   } catch {
+    // Fallback manuale con SITE_ID + TOKEN
     const siteID = process.env.BLOBS_SITE_ID;
     const token = process.env.BLOBS_TOKEN;
-    if(!siteID || !token){
-      throw new Error('MissingBlobsConfig: set BLOBS_SITE_ID and BLOBS_TOKEN in Environment variables');
+    if (!siteID || !token) {
+      throw new Error(
+        'MissingBlobsConfig: set BLOBS_SITE_ID and BLOBS_TOKEN in Environment variables'
+      );
     }
-    const client = createClient({ siteID, token });
+    const client = new BlobsClient({ siteID, token });
     return client.store('paris-league');
   }
 }
@@ -49,3 +54,4 @@ function jsonRes(statusCode, body) {
     body: JSON.stringify(body),
   };
 }
+
