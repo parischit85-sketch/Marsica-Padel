@@ -1,76 +1,51 @@
 // netlify/functions/state.js
-// Gestione stato via Netlify Blobs (nativo o manuale con SITE_ID+TOKEN)
-// Richiede le env: BLOBS_SITE_ID, BLOBS_TOKEN (per fallback manuale)
+// Usa Neon come storage JSON per players + matches
 
-const blobs = require('@netlify/blobs');
-const getStoreMaybe = () => {
+import { neon } from '@netlify/neon';
+
+const sql = neon(); // usa automaticamente NETLIFY_DATABASE_URL
+
+async function ensureInit() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS app_state (
+      id int PRIMARY KEY,
+      data jsonb NOT NULL
+    )
+  `;
+  const res = await sql`SELECT 1 FROM app_state WHERE id=1`;
+  if (res.length === 0) {
+    await sql`INSERT INTO app_state (id, data) VALUES (1, ${JSON.stringify({ players: [], matches: [] })}::jsonb)`;
+  }
+}
+
+export async function handler(event) {
   try {
-    if (typeof blobs.getStore === 'function') {
-      return blobs.getStore('paris-league'); // tenterà Blobs nativo
+    await ensureInit();
+
+    if (event.httpMethod === 'GET') {
+      const rows = await sql`SELECT data FROM app_state WHERE id=1`;
+      return jsonRes(200, rows[0].data);
     }
-  } catch (e) {
-    // prosegui con fallback
-  }
 
-  // Fallback manuale
-  const siteID = process.env.BLOBS_SITE_ID;
-  const token  = process.env.BLOBS_TOKEN;
-  if (!siteID || !token) {
-    throw new Error(
-      'MissingBlobsConfig: set BLOBS_SITE_ID and BLOBS_TOKEN in Environment variables'
-    );
-  }
-
-  // 1) createClient se disponibile (v6+)
-  if (typeof blobs.createClient === 'function') {
-    const client = blobs.createClient({ siteID, token });
-    return client.store('paris-league');
-  }
-
-  // 2) BlobsClient come fallback alternativo (alcuni ambienti)
-  if (typeof blobs.BlobsClient === 'function') {
-    const client = new blobs.BlobsClient({ siteID, token });
-    return client.store('paris-league');
-  }
-
-  // 3) Se proprio non c'è nulla, segnala chiaramente
-  throw new Error(
-    'Netlify Blobs client non disponibile: né getStore né createClient/BlobsClient. ' +
-    'Controlla la versione di @netlify/blobs (dependencies) e riesegui il deploy senza cache.'
-  );
-};
-
-exports.handler = async (event) => {
-  const store = getStoreMaybe();
-  const KEY = 'state.json';
-
-  if (event.httpMethod === 'GET') {
-    const json = await store.get(KEY, { type: 'json' });
-    const initial = json ?? { players: [], matches: [] };
-    if (!json) await store.setJSON(KEY, initial);
-    return jsonRes(200, initial);
-  }
-
-  if (event.httpMethod === 'POST') {
-    try {
-      const data = JSON.parse(event.body || '{}');
-      if (!Array.isArray(data.players) || !Array.isArray(data.matches)) {
+    if (event.httpMethod === 'POST') {
+      const body = JSON.parse(event.body || '{}');
+      if (!Array.isArray(body.players) || !Array.isArray(body.matches)) {
         return jsonRes(400, { error: 'payload non valido: servono players[] e matches[]' });
       }
-      await store.setJSON(KEY, { players: data.players, matches: data.matches });
+      await sql`UPDATE app_state SET data=${JSON.stringify(body)}::jsonb WHERE id=1`;
       return jsonRes(200, { ok: true });
-    } catch (e) {
-      return jsonRes(500, { error: 'JSON non valido', details: String(e) });
     }
-  }
 
-  return jsonRes(405, { error: 'Method not allowed' });
-};
+    return jsonRes(405, { error: 'Method not allowed' });
+  } catch (err) {
+    return jsonRes(500, { error: String(err) });
+  }
+}
 
 function jsonRes(statusCode, body) {
   return {
     statusCode,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
 }
